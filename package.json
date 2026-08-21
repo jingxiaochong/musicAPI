@@ -5,9 +5,9 @@
   "scripts": {
     "dev": "nodemon app.js",
     "start": "node app.js",
-    "pm2:start": "mkdir -p log && pm2 start ecosystem.config.cjs --only musicAPI",
-    "pm2:restart": "mkdir -p log && pm2 restart musicAPI --update-env",
-    "pm2:stop": "pm2 stop musicAPI",
+    "pm2:start": "bash start.sh",
+    "pm2:restart": "bash restart.sh",
+    "pm2:stop": "bash stop.sh",
     "pm2:logs": "pm2 logs musicAPI",
     "test": "mocha -r intelli-espower-loader -t 60000 server.test.js main.test.js --exit",
     "lint": "eslint \"**/*.{js,ts}\"",

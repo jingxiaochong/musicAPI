@@ -4,8 +4,10 @@ This directory (`musicAPI`) contains the community-maintained NeteaseCloudMusicA
 service. It is intended for private, single-user use. It does not provide an
 official NetEase API or guarantee that upstream endpoints remain stable.
 
-The sibling `musicWEB` directory contains the personal web player. It also has
-its own Compose file and joins the shared `ncm_net` Docker network.
+The sibling `musicWEB` directory contains the public web player source. It is
+built and deployed separately. The private deployment repository owns the
+server-specific domain, TLS certificate, static-file path, and reverse-proxy
+configuration.
 
 ## PM2
 
@@ -20,20 +22,25 @@ npm run pm2:restart
 npm run pm2:stop
 ```
 
-The PM2 process is named `musicAPI`. The default binding is `127.0.0.1:3000`, which is suitable when the web
+The PM2 process is named `musicAPI`. The default binding is `127.0.0.1:4397`, which is suitable when the web
 server or reverse proxy runs on the same machine.
+
+When the web player uses a separate domain, set `CORS_ALLOW_ORIGIN` in the
+private `.env` to the exact player origin and keep the `/api/` prefix in browser
+requests. The private Nginx configuration removes that prefix before proxying
+to the API process.
 
 ## Local smoke test
 
 ```bash
 cp .env.example .env
-docker compose up -d --build
-curl -fsS http://localhost:8080/
+docker compose up -d --build ncm_api
+curl -fsS http://localhost:4397/
 ```
 
 The container binds to `127.0.0.1` by default. On a private server, expose it
 through an existing HTTPS reverse proxy, VPN, or tunnel with authentication;
-do not publish port 3000 directly to the Internet.
+do not publish port 4397 directly to the Internet.
 
 ## Login
 
@@ -46,7 +53,7 @@ or a public request URL.
 
 ```bash
 git pull --ff-only
-docker compose up -d --build
+docker compose up -d --build ncm_api
 docker compose logs --tail=100 ncm_api
 ```
 

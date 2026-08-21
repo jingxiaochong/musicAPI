@@ -11,19 +11,9 @@ services:
     ports:
       # Keep the API bound to localhost by default. Put HTTPS/auth in front of it
       # with the private server's existing reverse proxy or VPN.
-      - "${NCM_BIND_ADDRESS:-127.0.0.1}:${NCM_PORT:-3000}:3000"
+      - "${NCM_BIND_ADDRESS:-127.0.0.1}:${NCM_PORT:-4397}:3000"
     volumes:
       - ncm_api_runtime:/tmp
-
-  musicWEB:
-    build:
-      context: ../musicWEB
-    container_name: musicWEB
-    restart: unless-stopped
-    depends_on:
-      - ncm_api
-    ports:
-      - "${NCM_WEB_BIND_ADDRESS:-127.0.0.1}:${NCM_WEB_PORT:-8080}:80"
 
 networks:
   default:
