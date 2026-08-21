@@ -2,7 +2,9 @@ require('dotenv').config()
 const fs = require('fs')
 const path = require('path')
 const express = require('express')
+const axios = require('axios')
 const request = require('./util/request')
+const songUrlV1 = require('./module/song_url_v1')
 const packageJSON = require('./package.json')
 const exec = require('child_process').exec
 const cache = require('./util/apicache').middleware
@@ -11,6 +13,47 @@ const fileUpload = require('express-fileupload')
 const decode = require('safe-decode-uri-component')
 const logger = require('./util/logger.js')
 const { APP_CONF } = require('./util/config.json')
+
+const MUSIC_STREAM_LEVELS = new Set([
+  'standard',
+  'exhigh',
+  'lossless',
+  'hires',
+  'jyeffect',
+  'sky',
+  'vivid',
+  'jymaster',
+])
+
+function isAllowedMusicHost(hostname) {
+  const normalizedHostname = hostname.toLowerCase()
+  return (
+    normalizedHostname === 'music.126.net' ||
+    normalizedHostname.endsWith('.music.126.net')
+  )
+}
+
+function createModuleRequest(req) {
+  return (...params) => {
+    const requestParams = [...params]
+    const options = requestParams[2] || {}
+    let ip = options.randomCNIP ? global.cnIp : req.ip
+
+    if (ip && ip.startsWith('::ffff:')) {
+      ip = ip.slice(7)
+    }
+    if (ip === '::1') {
+      ip = global.cnIp
+    }
+
+    requestParams[2] = {
+      ...options,
+      ip,
+    }
+
+    return request(...requestParams)
+  }
+}
 
 /**
  * The version check result.
@@ -234,6 +277,116 @@ async function constructServer(moduleDefs) {
       ).trim()
     })
     next()
+  })
+
+  /**
+   * Relay NetEase audio through this server so clients that cannot reach the
+   * NetEase CDN directly can still play a song. The upstream URL is resolved
+   * by song ID and restricted to the NetEase music CDN.
+   */
+  app.get('/music/stream', async (req, res) => {
+    const id = String(req.query.id || '').trim()
+    const requestedLevel = String(req.query.level || 'standard').trim()
+    const level = MUSIC_STREAM_LEVELS.has(requestedLevel)
+      ? requestedLevel
+      : 'standard'
+
+    if (!/^\d+$/.test(id)) {
+      res.status(400).send({
+        code: 400,
+        message: '缺少有效的歌曲 ID',
+      })
+      return
+    }
+
+    try {
+      const moduleResponse = await songUrlV1(
+        {
+          id,
+          level,
+          encodeType: 'mp3',
+          cookie: req.cookies,
+        },
+        createModuleRequest(req),
+      )
+      const song = moduleResponse.body?.data?.[0]
+
+      if (!song?.url) {
+        res.status(moduleResponse.status || 404).send({
+          code: song?.code || moduleResponse.body?.code || 404,
+          message: song?.message || '当前歌曲没有可用播放地址',
+        })
+        return
+      }
+
+      const mediaUrl = new URL(song.url)
+      if (
+        !['http:', 'https:'].includes(mediaUrl.protocol) ||
+        !isAllowedMusicHost(mediaUrl.hostname)
+      ) {
+        res.status(502).send({
+          code: 502,
+          message: '播放地址不在允许的网易云 CDN 范围内',
+        })
+        return
+      }
+
+      const upstreamHeaders = {
+        'User-Agent':
+          req.get('User-Agent') ||
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        Referer: 'https://music.163.com/',
+      }
+      if (req.headers.range) {
+        upstreamHeaders.Range = req.headers.range
+      }
+      if (req.headers['if-range']) {
+        upstreamHeaders['If-Range'] = req.headers['if-range']
+      }
+
+      const upstream = await axios.get(mediaUrl.toString(), {
+        responseType: 'stream',
+        headers: upstreamHeaders,
+        timeout: 30000,
+        maxRedirects: 5,
+        proxy: false,
+        validateStatus: (status) => status === 200 || status === 206,
+      })
+
+      const forwardedHeaders = [
+        'accept-ranges',
+        'content-length',
+        'content-range',
+        'content-type',
+        'etag',
+        'last-modified',
+      ]
+      for (const header of forwardedHeaders) {
+        const value = upstream.headers[header]
+        if (value !== undefined) {
+          res.setHeader(header, value)
+        }
+      }
+      res.setHeader('Cache-Control', 'private, no-store')
+      res.status(upstream.status)
+
+      upstream.data.on('error', (error) => {
+        logger.error(`Audio stream failed: ${id}`, error)
+        res.destroy(error)
+      })
+      res.on('close', () => upstream.data.destroy())
+      upstream.data.pipe(res)
+    } catch (error) {
+      logger.error(`Audio relay failed: ${id}`, error)
+      if (!res.headersSent) {
+        res.status(error.response?.status || 502).send({
+          code: error.response?.status || 502,
+          message: '音频中转失败',
+        })
+      } else {
+        res.destroy(error)
+      }
+    }
   })
 
   /**
